@@ -18,7 +18,9 @@ data class PoseResult(
 enum class TargetPose {
     WARRIOR_II,
     TREE_POSE,
-    WARRIOR_I
+    WARRIOR_I,
+    DOWN_DOG,
+    COBRA
 }
 
 object PoseAnalyzer {
@@ -34,6 +36,8 @@ object PoseAnalyzer {
             TargetPose.WARRIOR_II -> analyzeWarriorII(landmarks)
             TargetPose.TREE_POSE -> analyzeTreePose(landmarks)
             TargetPose.WARRIOR_I -> analyzeWarriorI(landmarks)
+            TargetPose.DOWN_DOG -> analyzeDownDog(landmarks)
+            TargetPose.COBRA -> analyzeCobra(landmarks)
         }
     }
 
@@ -101,6 +105,44 @@ object PoseAnalyzer {
         }
         
         return PoseResult("Warrior I", false, "Raise arms overhead", emptyList(), listOf(15, 16))
+    }
+
+    private fun analyzeDownDog(landmarks: List<NormalizedLandmark>): PoseResult {
+        // Down Dog: Inverted V shape. 
+        // Hips (23, 24) should be the highest point (lowest Y).
+        // Shoulders (11, 12) and Ankles (27, 28) should be lower (higher Y).
+        // Angle at Hips should be ~60-90 degrees.
+        
+        if (landmarks.size <= 28) return PoseResult("Down Dog", false, "Partial detection")
+        
+        val hipY = (landmarks[23].y() + landmarks[24].y()) / 2
+        val shoulderY = (landmarks[11].y() + landmarks[12].y()) / 2
+        val ankleY = (landmarks[27].y() + landmarks[28].y()) / 2
+        
+        // Check if hips are above shoulders and ankles
+        if (hipY < shoulderY && hipY < ankleY) {
+            return PoseResult("Down Dog", true, "Great Down Dog!", listOf(11, 12, 23, 24, 27, 28), emptyList())
+        }
+        
+        return PoseResult("Down Dog", false, "Lift your hips high!", emptyList(), listOf(23, 24))
+    }
+
+    private fun analyzeCobra(landmarks: List<NormalizedLandmark>): PoseResult {
+        // Cobra: Lying prone, chest lifted.
+        // Hips (23, 24) on ground (low Y).
+        // Shoulders (11, 12) significantly higher than hips (smaller Y).
+        
+        if (landmarks.size <= 24) return PoseResult("Cobra", false, "Partial detection")
+        
+        val hipY = (landmarks[23].y() + landmarks[24].y()) / 2
+        val shoulderY = (landmarks[11].y() + landmarks[12].y()) / 2
+        
+        // Check if shoulders are above hips (smaller Y)
+        if (shoulderY < hipY - 0.1) { // 0.1 threshold
+             return PoseResult("Cobra", true, "Great Cobra!", listOf(11, 12, 23, 24), emptyList())
+        }
+        
+        return PoseResult("Cobra", false, "Lift your chest!", emptyList(), listOf(11, 12))
     }
 
     private fun calculateAngle(a: NormalizedLandmark, b: NormalizedLandmark, c: NormalizedLandmark): Double {

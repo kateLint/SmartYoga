@@ -21,7 +21,13 @@ class PoseViewModel : ViewModel() {
     val inputDims: StateFlow<Pair<Int, Int>> = _inputDims.asStateFlow()
     
     // Session State
-    private val poses = listOf(TargetPose.WARRIOR_II, TargetPose.TREE_POSE, TargetPose.WARRIOR_I)
+    private val poses = listOf(
+        TargetPose.WARRIOR_II, 
+        TargetPose.TREE_POSE, 
+        TargetPose.WARRIOR_I,
+        TargetPose.DOWN_DOG,
+        TargetPose.COBRA
+    )
     private var currentPoseIndex = 0
     
     private val _currentPose = MutableStateFlow(poses[currentPoseIndex])
@@ -35,12 +41,14 @@ class PoseViewModel : ViewModel() {
 
     private var timerJob: Job? = null
     private val HOLD_DURATION = 5 // seconds
+    
+    // Tracking (will be set from MainActivity)
+    var sessionTracker: SessionTracker? = null
 
     fun onPoseDetected(result: PoseLandmarkerResult, width: Int, height: Int) {
         if (_isSessionComplete.value) return
 
         _inputDims.value = Pair(width, height)
-        _rawPoseResult.value = result
         
         val analysis = PoseAnalyzer.analyzePose(result, _currentPose.value)
         _poseResult.value = analysis
@@ -50,6 +58,13 @@ class PoseViewModel : ViewModel() {
         } else {
             resetTimer()
         }
+    }
+    
+    fun restartSession() {
+        currentPoseIndex = 0
+        _currentPose.value = poses[0]
+        _isSessionComplete.value = false
+        resetTimer()
     }
     
     private fun startTimer() {
@@ -78,6 +93,7 @@ class PoseViewModel : ViewModel() {
             _currentPose.value = poses[currentPoseIndex]
         } else {
             _isSessionComplete.value = true
+            sessionTracker?.logSessionComplete()
         }
     }
 }
