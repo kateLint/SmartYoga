@@ -9,9 +9,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -26,6 +33,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 
@@ -91,22 +100,97 @@ fun SmartYogaApp(viewModel: PoseViewModel, poseDetector: PoseDetector) {
             CameraPreview(poseDetector = poseDetector)
             
             val poseResult by viewModel.poseResult.collectAsState()
+            val rawPoseResult by viewModel.rawPoseResult.collectAsState()
             val inputDims by viewModel.inputDims.collectAsState()
-            PoseOverlay(result = poseResult, inputDims = inputDims)
             
-            val feedback by viewModel.feedback.collectAsState()
-            Text(
-                text = feedback,
-                color = Color.White,
-                style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(32.dp)
+            PoseOverlay(
+                result = poseResult,
+                poseLandmarkerResult = rawPoseResult,
+                inputDims = inputDims
             )
-        }
-    } else {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Please grant camera permission")
+            
+            // Session UI
+            val currentPose by viewModel.currentPose.collectAsState()
+            val timerValue by viewModel.timerValue.collectAsState()
+            val isSessionComplete by viewModel.isSessionComplete.collectAsState()
+            
+            if (isSessionComplete) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.7f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Session Complete! 🎉",
+                        color = Color.White,
+                        style = MaterialTheme.typography.displayMedium
+                    )
+                }
+            } else {
+                // Top Bar: Pose Name and Reference Image
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Current Pose:",
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = currentPose.name.replace("_", " "),
+                            color = Color.White,
+                            style = MaterialTheme.typography.headlineMedium
+                        )
+                    }
+                    
+                    // Reference Image
+                    val imageRes = when(currentPose) {
+                        TargetPose.WARRIOR_II -> R.drawable.warrior2_pose
+                        TargetPose.TREE_POSE -> R.drawable.tree_pose
+                        TargetPose.WARRIOR_I -> R.drawable.warrior1_pose
+                    }
+                    
+                    Image(
+                        painter = painterResource(id = imageRes),
+                        contentDescription = "Reference Pose",
+                        modifier = Modifier
+                            .size(100.dp)
+                            .background(Color.White.copy(alpha = 0.8f), shape = MaterialTheme.shapes.medium)
+                            .padding(4.dp)
+                    )
+                }
+                
+                // Bottom Bar: Feedback and Timer
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (timerValue > 0) {
+                        Text(
+                            text = "Hold: ${5 - timerValue}s",
+                            color = Color.Green,
+                            style = MaterialTheme.typography.displayLarge
+                        )
+                    }
+                    
+                    Text(
+                        text = poseResult?.feedback ?: "Waiting...",
+                        color = if (poseResult?.isCorrect == true) Color.Green else Color.Red,
+                        style = MaterialTheme.typography.headlineSmall,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
         }
     }
 }

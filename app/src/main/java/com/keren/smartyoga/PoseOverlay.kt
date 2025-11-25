@@ -12,7 +12,8 @@ import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 
 @Composable
 fun PoseOverlay(
-    result: PoseLandmarkerResult?,
+    result: PoseResult?,
+    poseLandmarkerResult: PoseLandmarkerResult?,
     inputDims: Pair<Int, Int>,
     modifier: Modifier = Modifier
 ) {
@@ -29,7 +30,7 @@ fun PoseOverlay(
         val offsetX = (size.width - scaledWidth) / 2f
         val offsetY = (size.height - scaledHeight) / 2f
 
-        result?.landmarks()?.firstOrNull()?.let { landmarks ->
+        poseLandmarkerResult?.landmarks()?.firstOrNull()?.let { landmarks ->
             val points = landmarks.map { 
                 // Mirror X for front camera (1 - x)
                 val x = (1f - it.x()) * scaledWidth + offsetX
@@ -38,31 +39,57 @@ fun PoseOverlay(
             }
             
             // Draw points
-            drawPoints(
-                points = points,
-                pointMode = PointMode.Points,
-                color = Color.Red,
-                strokeWidth = 20f,
-                cap = StrokeCap.Round
-            )
+            points.forEachIndexed { index, point ->
+                val color = if (result?.correctLandmarks?.contains(index) == true) Color.Green 
+                           else if (result?.incorrectLandmarks?.contains(index) == true) Color.Red 
+                           else Color.White
+                
+                drawCircle(
+                    color = color,
+                    radius = 10f,
+                    center = point
+                )
+            }
             
+            // Helper to draw connection
+            fun drawConnection(start: Int, end: Int) {
+                if (points.size > maxOf(start, end)) {
+                    val isCorrect = result?.correctLandmarks?.contains(start) == true && 
+                                    result?.correctLandmarks?.contains(end) == true
+                    val color = if (isCorrect) Color.Green else Color.White
+                    
+                    drawLine(
+                        color = color,
+                        start = points[start],
+                        end = points[end],
+                        strokeWidth = 8f,
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
+
             // Draw connections
             // Left Arm
-            if (points.size > 15) {
-                drawLine(Color.Green, points[11], points[13], 10f)
-                drawLine(Color.Green, points[13], points[15], 10f)
-            }
+            drawConnection(11, 13)
+            drawConnection(13, 15)
             
             // Right Arm
-            if (points.size > 16) {
-                drawLine(Color.Green, points[12], points[14], 10f)
-                drawLine(Color.Green, points[14], points[16], 10f)
-            }
+            drawConnection(12, 14)
+            drawConnection(14, 16)
             
             // Shoulders
-            if (points.size > 12) {
-                drawLine(Color.Green, points[11], points[12], 10f)
-            }
+            drawConnection(11, 12)
+            
+            // Body
+            drawConnection(11, 23)
+            drawConnection(12, 24)
+            drawConnection(23, 24)
+            
+            // Legs
+            drawConnection(23, 25)
+            drawConnection(25, 27)
+            drawConnection(24, 26)
+            drawConnection(26, 28)
         }
     }
 }

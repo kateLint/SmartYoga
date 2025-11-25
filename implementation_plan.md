@@ -33,8 +33,32 @@ Build a real-time yoga pose correction app using MediaPipe on Android. The app w
 #### [NEW] [PoseOverlay.kt]
 - Canvas drawing to show skeleton overlay on top of camera feed.
 
-#### [NEW] [PoseAnalyzer.kt]
-- Logic to calculate angles (e.g., elbow angle, knee angle) and determine if a pose is correct.
+#### [MODIFY] [PoseAnalyzer.kt]
+- Refactor to support multiple poses (Warrior II, Tree Pose, Warrior I).
+- Return a structured `PoseResult` object instead of a string string, containing:
+    - Detected Pose Name
+    - Correctness (Boolean)
+    - Feedback Message
+    - List of "Correct" limbs (for green highlighting) and "Incorrect" limbs (for red highlighting).
+
+#### [MODIFY] [PoseViewModel.kt]
+- Implement **Session Mode**:
+    - List of poses to cycle through (Warrior II -> Tree -> Warrior I).
+    - State Machine: `ShowInstruction` -> `Detecting` -> `Holding(timer)` -> `Success` -> `NextPose`.
+    - `currentPoseImage`: Expose the reference image for the current pose.
+    - `timer`: Count down from 5 seconds when pose is correct.
+
+#### [MODIFY] [MainActivity.kt]
+- **Reference Image Overlay**: Show the target pose image in the corner or semi-transparent over the screen.
+- **Session UI**: "Pose 1/3", "Hold for 5s", "Next Pose in 3s".
+
+### Assets
+#### [NEW] [Reference Images]
+- Generate images for:
+    - `warrior2.png`
+    - `tree_pose.png`
+    - `warrior1.png`
+- Place in `app/src/main/res/drawable`.
 
 ## Verification Plan
 ### Manual Verification

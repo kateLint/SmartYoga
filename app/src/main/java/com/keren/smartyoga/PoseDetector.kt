@@ -2,6 +2,7 @@ package com.keren.smartyoga
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.os.SystemClock
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.framework.image.MPImage
@@ -39,9 +40,13 @@ class PoseDetector(
     }
 
     fun detect(bitmap: Bitmap, rotation: Int) {
-        // Rotate bitmap if needed (CameraX usually gives rotated bitmap, but we might need to adjust)
-        // For simplicity, assuming bitmap is already correct or we handle rotation in CameraAnalyzer
-        val mpImage = BitmapImageBuilder(bitmap).build()
+        val matrix = Matrix()
+        matrix.postRotate(rotation.toFloat())
+        val rotatedBitmap = Bitmap.createBitmap(
+            bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+        )
+        
+        val mpImage = BitmapImageBuilder(rotatedBitmap).build()
         val timestamp = SystemClock.uptimeMillis()
         poseLandmarker?.detectAsync(mpImage, timestamp)
     }
