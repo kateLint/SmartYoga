@@ -64,4 +64,4 @@ Track your daily consistency and total sessions. Watch your yoga journey unfold!
 
 ---
 
-*Built with ❤️ and 🤖 by Antigravity*
+*Built with ❤️*

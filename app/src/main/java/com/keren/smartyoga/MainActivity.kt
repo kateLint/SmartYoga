@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
@@ -56,8 +57,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        poseDetector = PoseDetector(this) { result, width, height ->
-            viewModel.onPoseDetected(result, width, height)
+        poseDetector = PoseDetector(this) { result, width, height, inputImage, originalBitmap ->
+            viewModel.onPoseDetected(result, width, height, inputImage, originalBitmap)
         }
 
         setContent {
@@ -99,13 +100,59 @@ fun SmartYogaApp(viewModel: PoseViewModel, poseDetector: PoseDetector) {
     // Music State
     var isMusicPlaying by remember { mutableStateOf(false) }
     val mediaPlayer = remember { 
-        // Placeholder: User needs to add R.raw.calming_music
-        // MediaPlayer.create(context, R.raw.calming_music).apply { isLooping = true }
-        null as android.media.MediaPlayer?
+        try {
+            android.media.MediaPlayer.create(context, R.raw.calming_music).apply { isLooping = true }
+        } catch (e: Exception) {
+            null
+        }
+    }
+    
+    // Handle Lifecycle for Music
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
+                if (mediaPlayer?.isPlaying == true) {
+                    mediaPlayer.pause()
+                }
+            } else if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                if (isMusicPlaying && mediaPlayer?.isPlaying == false) {
+                    mediaPlayer.start()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            mediaPlayer?.release()
+        }
     }
     
     // Background State
-    var showTropicBackground by remember { mutableStateOf(false) }
+    val backgroundBitmap by viewModel.backgroundBitmap.collectAsState()
+    val segmentedBitmap by viewModel.segmentedBitmap.collectAsState()
+    
+    // Pickers
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        uri?.let {
+            val source = android.graphics.ImageDecoder.createSource(context.contentResolver, it)
+            val bitmap = android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                decoder.isMutableRequired = true 
+            }
+            viewModel.setBackground(bitmap)
+        }
+    }
+    
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        bitmap?.let { viewModel.setBackground(it) }
+    }
+    
+
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -125,27 +172,24 @@ fun SmartYogaApp(viewModel: PoseViewModel, poseDetector: PoseDetector) {
 
     if (hasCameraPermission) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Background Layer
-            if (showTropicBackground) {
-                // Placeholder for tropic background
-                Box(modifier = Modifier.fillMaxSize().background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(Color(0xFF40E0D0), Color(0xFFFF0080))
-                    )
-                ))
-                // If image existed:
-                // Image(painter = painterResource(id = R.drawable.tropic_background), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            } else {
-                // Default Dark Background
-                Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+            
+            // Always show CameraPreview to keep the camera lifecycle active
+            CameraPreview(poseDetector = poseDetector)
+            
+            if (segmentedBitmap != null) {
+                // Show Segmented View (Background + Person) overlaying the camera
+                Image(
+                    bitmap = segmentedBitmap!!.asImageBitmap(),
+                    contentDescription = "Segmented View",
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
             
-            // Camera Layer (Semi-transparent if tropic background is on? No, camera is opaque)
-            // If we want "Tropic Background", we usually mean *replacing* the camera background.
-            // Since we don't have segmentation yet, we'll just show the camera.
-            // OR we can make the camera semi-transparent to show the "vibe" (not recommended).
-            // Let's just show the camera. The "Background" option might be better as a "Theme" for the UI overlay.
-            CameraPreview(poseDetector = poseDetector, modifier = Modifier.alpha(if (showTropicBackground) 0.8f else 1f))
+            // If background is selected but segmentation isn't ready yet (or failed), we might see camera.
+            // But we want to force background mode if background is set.
+            // Actually, if backgroundBitmap is set, we expect segmentedBitmap to update.
+            // Let's add a loading indicator or just keep camera until then.
             
             val poseResult by viewModel.poseResult.collectAsState()
             val rawPoseResult by viewModel.rawPoseResult.collectAsState()
@@ -246,12 +290,45 @@ fun SmartYogaApp(viewModel: PoseViewModel, poseDetector: PoseDetector) {
                                tint = Color.White
                            )
                        }
-                       IconButton(onClick = { showTropicBackground = !showTropicBackground }) {
+                       
+                       // Background Options
+                       var showBgMenu by remember { mutableStateOf(false) }
+                       IconButton(onClick = { showBgMenu = !showBgMenu }) {
                            Icon(
                                imageVector = Icons.Filled.Image,
                                contentDescription = "Background",
-                               tint = Color.White
+                               tint = if (backgroundBitmap != null) Color.Green else Color.White
                            )
+                       }
+                       
+                       if (showBgMenu) {
+                           Column(
+                               modifier = Modifier
+                                   .background(Color.Black.copy(alpha = 0.8f), shape = MaterialTheme.shapes.small)
+                                   .padding(8.dp)
+                           ) {
+                               Button(onClick = { 
+                                   showBgMenu = false
+                                   // Load Tropic Background from Resources
+                                   val bitmap = android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.tropic_bg)
+                                   viewModel.setBackground(bitmap)
+                               }) { Text("Tropic") }
+                               
+                               Button(onClick = { 
+                                   galleryLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                   showBgMenu = false
+                               }) { Text("Gallery") }
+                               
+                               Button(onClick = { 
+                                   cameraLauncher.launch(null)
+                                   showBgMenu = false
+                               }) { Text("Camera") }
+                               
+                               Button(onClick = { 
+                                   viewModel.setBackground(null)
+                                   showBgMenu = false
+                               }) { Text("Off") }
+                           }
                        }
                    }
                 }

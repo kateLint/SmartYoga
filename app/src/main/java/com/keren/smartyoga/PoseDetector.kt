@@ -13,9 +13,10 @@ import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 
 class PoseDetector(
     private val context: Context,
-    private val listener: (PoseLandmarkerResult, Int, Int) -> Unit
+    private val listener: (PoseLandmarkerResult, Int, Int, MPImage?, Bitmap?) -> Unit
 ) {
     private var poseLandmarker: PoseLandmarker? = null
+    private var lastRotatedBitmap: Bitmap? = null
 
     init {
         setupPoseLandmarker()
@@ -31,8 +32,9 @@ class PoseDetector(
             .setMinPoseDetectionConfidence(0.5f)
             .setMinTrackingConfidence(0.5f)
             .setRunningMode(RunningMode.LIVE_STREAM)
+            .setOutputSegmentationMasks(true)
             .setResultListener { result: PoseLandmarkerResult, inputImage: MPImage ->
-                listener(result, inputImage.width, inputImage.height)
+                listener(result, inputImage.width, inputImage.height, inputImage, lastRotatedBitmap)
             }
             .build()
 
@@ -45,9 +47,12 @@ class PoseDetector(
         val rotatedBitmap = Bitmap.createBitmap(
             bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
         )
-        
+
+        lastRotatedBitmap = rotatedBitmap
+
         val mpImage = BitmapImageBuilder(rotatedBitmap).build()
         val timestamp = SystemClock.uptimeMillis()
+
         poseLandmarker?.detectAsync(mpImage, timestamp)
     }
 
