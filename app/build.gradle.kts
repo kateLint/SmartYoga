@@ -52,6 +52,7 @@ dependencies {
 
     // MediaPipe
     implementation(libs.mediapipe.tasks.vision)
+    implementation("com.google.mediapipe:tasks-genai:0.10.14")
 
     // Compose
     implementation(libs.androidx.activity.compose)
@@ -61,6 +62,9 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
+
+    // Splash Screen API
+    implementation("androidx.core:core-splashscreen:1.0.1")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

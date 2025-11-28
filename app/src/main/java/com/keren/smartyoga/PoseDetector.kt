@@ -6,17 +6,18 @@ import android.graphics.Matrix
 import android.os.SystemClock
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.framework.image.MPImage
+import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
-
 class PoseDetector(
     private val context: Context,
-    private val listener: (PoseLandmarkerResult, Int, Int, MPImage?, Bitmap?) -> Unit
+    private val listener: (PoseLandmarkerResult, Int, Int, MPImage?, Bitmap?, Long) -> Unit
 ) {
     private var poseLandmarker: PoseLandmarker? = null
     private var lastRotatedBitmap: Bitmap? = null
+    private var inferenceStartTime: Long = 0
 
     init {
         setupPoseLandmarker()
@@ -25,6 +26,7 @@ class PoseDetector(
     private fun setupPoseLandmarker() {
         val baseOptions = BaseOptions.builder()
             .setModelAssetPath("pose_landmarker_lite.task")
+            .setDelegate(Delegate.GPU)
             .build()
 
         val options = PoseLandmarker.PoseLandmarkerOptions.builder()
@@ -34,7 +36,8 @@ class PoseDetector(
             .setRunningMode(RunningMode.LIVE_STREAM)
             .setOutputSegmentationMasks(true)
             .setResultListener { result: PoseLandmarkerResult, inputImage: MPImage ->
-                listener(result, inputImage.width, inputImage.height, inputImage, lastRotatedBitmap)
+                val inferenceTime = SystemClock.uptimeMillis() - inferenceStartTime
+                listener(result, inputImage.width, inputImage.height, inputImage, lastRotatedBitmap, inferenceTime)
             }
             .build()
 
@@ -52,6 +55,7 @@ class PoseDetector(
 
         val mpImage = BitmapImageBuilder(rotatedBitmap).build()
         val timestamp = SystemClock.uptimeMillis()
+        inferenceStartTime = timestamp
 
         poseLandmarker?.detectAsync(mpImage, timestamp)
     }

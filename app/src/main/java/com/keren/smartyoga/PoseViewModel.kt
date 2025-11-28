@@ -2,6 +2,7 @@ package com.keren.smartyoga
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -11,7 +12,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import android.util.Log
-
+import com.keren.smartyoga.PoseAnalyzer
+import com.keren.smartyoga.YogaGuruEngine
+import java.math.BigDecimal
 class PoseViewModel : ViewModel() {
     private val _poseResult = MutableStateFlow<PoseResult?>(null)
     val poseResult: StateFlow<PoseResult?> = _poseResult.asStateFlow()
@@ -24,6 +27,7 @@ class PoseViewModel : ViewModel() {
     
     // Session State
     private val poses = listOf(
+        TargetPose.CALIBRATION,
         TargetPose.WARRIOR_II, 
         TargetPose.TREE_POSE, 
         TargetPose.WARRIOR_I,
@@ -48,155 +52,177 @@ class PoseViewModel : ViewModel() {
     var sessionTracker: SessionTracker? = null
 
     // Segmentation State
-    private val _segmentedBitmap = MutableStateFlow<android.graphics.Bitmap?>(null)
-    val segmentedBitmap: StateFlow<android.graphics.Bitmap?> = _segmentedBitmap.asStateFlow()
+    private val _maskBuffer = MutableStateFlow<java.nio.ByteBuffer?>(null)
+    val maskBuffer: StateFlow<java.nio.ByteBuffer?> = _maskBuffer.asStateFlow()
+    
+    private val _maskDims = MutableStateFlow<Pair<Int, Int>>(Pair(0, 0))
+    val maskDims: StateFlow<Pair<Int, Int>> = _maskDims.asStateFlow()
     
     private val _backgroundBitmap = MutableStateFlow<android.graphics.Bitmap?>(null)
     val backgroundBitmap: StateFlow<android.graphics.Bitmap?> = _backgroundBitmap.asStateFlow()
     
+    private val _inferenceTime = MutableStateFlow(0L)
+    val inferenceTime: StateFlow<Long> = _inferenceTime.asStateFlow()
+
+    // Logic & Stats State
+    private val landmarkHistory = ArrayDeque<List<NormalizedLandmark>>()
+    private var calibrationData = PoseAnalyzer.CalibrationData()
+
     fun setBackground(bitmap: android.graphics.Bitmap?) {
         _backgroundBitmap.value = bitmap
     }
 
-    fun onPoseDetected(result: PoseLandmarkerResult, width: Int, height: Int, inputImage: com.google.mediapipe.framework.image.MPImage?, originalBitmap: android.graphics.Bitmap?) {
+    fun onPoseDetected(result: PoseLandmarkerResult, width: Int, height: Int, inputImage: com.google.mediapipe.framework.image.MPImage?, originalBitmap: android.graphics.Bitmap?, inferenceTime: Long) {
+        _inferenceTime.value = inferenceTime
         if (_isSessionComplete.value) return
 
         _inputDims.value = Pair(width, height)
 
-        val analysis = PoseAnalyzer.analyzePose(result, _currentPose.value)
+        // Update History
+        if (result.landmarks().isNotEmpty()) {
+            landmarkHistory.addLast(result.landmarks().get(0))
+            if (landmarkHistory.size > 30) { // Keep last ~1 sec (30fps)
+                landmarkHistory.removeFirst()
+            }
+        }
+
+        val analysis = PoseAnalyzer.analyzePose(result, _currentPose.value, landmarkHistory, calibrationData)
         _poseResult.value = analysis
 
         if (analysis.isCorrect) {
+            // Special handling for Calibration
+            if (_currentPose.value == TargetPose.CALIBRATION) {
+                if (result.landmarks().isNotEmpty()) {
+                    val landmarks = result.landmarks().get(0)
+                    val leftArmAngle = PoseAnalyzer.calculateAngle(landmarks[11], landmarks[13], landmarks[15])
+                    val rightArmAngle = PoseAnalyzer.calculateAngle(landmarks[12], landmarks[14], landmarks[16])
+                    val avgAngle = (leftArmAngle + rightArmAngle) / 2.0
+                    calibrationData = calibrationData.copy(armStraightAngle = avgAngle)
+                }
+            }
             startTimer()
         } else {
             resetTimer()
         }
 
-        // Handle Segmentation if background is set
-        if (_backgroundBitmap.value != null && originalBitmap != null) {
-            // If we have a mask, use it. If not (no person detected), use an empty mask or just draw background.
-            val mask = if (result.segmentationMasks().isPresent) result.segmentationMasks().get()[0] else null
-            processSegmentation(originalBitmap, mask, _backgroundBitmap.value!!)
+        // Handle Segmentation
+        if (result.segmentationMasks().isPresent) {
+            val mask = result.segmentationMasks().get()[0]
+            val originalBuffer = com.google.mediapipe.framework.image.ByteBufferExtractor.extract(mask)
+
+            // Copy the buffer since MediaPipe may reuse it
+            val bufferSize = originalBuffer.remaining()
+            val copiedBuffer = java.nio.ByteBuffer.allocateDirect(bufferSize)
+            copiedBuffer.put(originalBuffer)
+            copiedBuffer.rewind()
+            originalBuffer.rewind()
+
+            _maskBuffer.value = copiedBuffer
+            _maskDims.value = Pair(mask.width, mask.height)
+
+            Log.d("PoseViewModel", "Mask received: ${mask.width}x${mask.height}, buffer size: $bufferSize")
         } else {
-            _segmentedBitmap.value = null
+            _maskBuffer.value = null
+            Log.d("PoseViewModel", "No segmentation mask available")
         }
     }
     
-    private var isProcessingFrame = false
+    // Chat State
+    private val _isChatMode = MutableStateFlow(false)
+    val isChatMode: StateFlow<Boolean> = _isChatMode.asStateFlow()
     
-    private fun processSegmentation(inputBitmap: android.graphics.Bitmap, mask: com.google.mediapipe.framework.image.MPImage?, background: android.graphics.Bitmap) {
-        if (isProcessingFrame) return
+    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
+    
+    private val _isLlmLoading = MutableStateFlow(false)
+    val isLlmLoading: StateFlow<Boolean> = _isLlmLoading.asStateFlow()
+    
+    private var yogaGuruEngine: YogaGuruEngine? = null
+    
+    // Initialize Engine lazily or on enterChatMode
+    
+    private val _isDownloadingModel = MutableStateFlow(false)
+    val isDownloadingModel: StateFlow<Boolean> = _isDownloadingModel.asStateFlow()
 
-        // Mirroring (Front Camera)
-        val matrix = android.graphics.Matrix()
-        matrix.preScale(-1f, 1f)
-        val mirroredInput = android.graphics.Bitmap.createBitmap(inputBitmap, 0, 0, inputBitmap.width, inputBitmap.height, matrix, true)
+    private val _downloadProgress = MutableStateFlow(0f)
+    val downloadProgress: StateFlow<Float> = _downloadProgress.asStateFlow()
 
-        val maskBitmap = if (mask != null) convertMaskToBitmap(mask) else null
-        val mirroredMask = if (maskBitmap != null) {
-             android.graphics.Bitmap.createBitmap(maskBitmap, 0, 0, maskBitmap.width, maskBitmap.height, matrix, true)
-        } else null
-
-        isProcessingFrame = true
+    fun enterChatMode(context: android.content.Context) {
+        _isChatMode.value = true
         
-        viewModelScope.launch(Dispatchers.Default) {
-            try {
-                val startTime = System.currentTimeMillis()
-                
-                // 3. Resize
-                val processWidth = 360
-                val scaleFactor = processWidth.toFloat() / mirroredInput.width
-                val processHeight = (mirroredInput.height * scaleFactor).toInt()
-                
-                val scaledInput = android.graphics.Bitmap.createScaledBitmap(mirroredInput, processWidth, processHeight, true)
-                val scaledBackground = android.graphics.Bitmap.createScaledBitmap(background, processWidth, processHeight, true)
-                
-                // 4. Compose Output
-                val output = android.graphics.Bitmap.createBitmap(processWidth, processHeight, android.graphics.Bitmap.Config.ARGB_8888)
-                val canvas = android.graphics.Canvas(output)
-                
-                // Draw Background
-                canvas.drawBitmap(scaledBackground, 0f, 0f, null)
-                
-                if (mirroredMask != null) {
-                    val scaledMaskForProcess = android.graphics.Bitmap.createScaledBitmap(mirroredMask, processWidth, processHeight, true)
-
-                    // Create person layer
-                    val personLayer = android.graphics.Bitmap.createBitmap(processWidth, processHeight, android.graphics.Bitmap.Config.ARGB_8888)
-                    val personCanvas = android.graphics.Canvas(personLayer)
-
-                    // 1. Draw the person (already color-corrected from convertMPImageToBitmap)
-                    personCanvas.drawBitmap(scaledInput, 0f, 0f, null)
-
-                    // 2. Apply mask to cut out background
-                    val xferPaint = android.graphics.Paint()
-                    xferPaint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN)
-                    personCanvas.drawBitmap(scaledMaskForProcess, 0f, 0f, xferPaint)
-
-                    // 3. Draw person layer onto background
-                    canvas.drawBitmap(personLayer, 0f, 0f, null)
+        if (yogaGuruEngine == null) {
+            yogaGuruEngine = YogaGuruEngine(context)
+            
+            // Start collecting responses
+            viewModelScope.launch {
+                yogaGuruEngine?.responseFlow?.collect { responseChunk ->
+                    _isLlmLoading.value = false
+                    val currentMessages = _chatMessages.value.toMutableList()
+                    if (currentMessages.isNotEmpty() && !currentMessages.last().isUser) {
+                        val lastMsg = currentMessages.removeAt(currentMessages.size - 1)
+                        currentMessages.add(lastMsg.copy(text = lastMsg.text + responseChunk))
+                    } else {
+                        currentMessages.add(ChatMessage(responseChunk, false))
+                    }
+                    _chatMessages.value = currentMessages
                 }
-                
-                _segmentedBitmap.value = output
-                
-            } catch (e: Exception) {
-                e.printStackTrace()
-            } finally {
-                isProcessingFrame = false
+            }
+        }
+        
+        // Check if model exists
+        if (!ModelDownloader.isModelDownloaded(context)) {
+            startModelDownload(context)
+        } else {
+            initializeEngine()
+        }
+    }
+
+    private fun startModelDownload(context: android.content.Context) {
+        if (_isDownloadingModel.value) return
+        
+        _isDownloadingModel.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val success = ModelDownloader.downloadModel(context) { progress ->
+                _downloadProgress.value = progress
+            }
+            _isDownloadingModel.value = false
+            if (success) {
+                initializeEngine()
+            } else {
+                val currentMessages = _chatMessages.value.toMutableList()
+                currentMessages.add(ChatMessage("Error: Failed to download model. Please check internet connection.", false))
+                _chatMessages.value = currentMessages
             }
         }
     }
-    private fun convertMaskToBitmap(mask: com.google.mediapipe.framework.image.MPImage): android.graphics.Bitmap? {
-        try {
-            // Try standard extraction first
-            return com.google.mediapipe.framework.image.BitmapExtractor.extract(mask)
-        } catch (e: Exception) {
-            // Fallback to ByteBuffer extraction
-            try {
-                val buffer = com.google.mediapipe.framework.image.ByteBufferExtractor.extract(mask)
-                val width = mask.width
-                val height = mask.height
-                
-                val pixelCount = width * height
-                val bufferSize = buffer.capacity()
-                
-                // Use ARGB_8888 for better compatibility with Canvas drawing
-                val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
-                val pixels = IntArray(pixelCount)
-                
-                if (bufferSize >= pixelCount * 4) {
-                    // Float32 (4 bytes per pixel) - Confidence 0.0 to 1.0
-                    buffer.rewind()
-                    val floatBuffer = buffer.asFloatBuffer()
-                    for (i in 0 until pixelCount) {
-                        val confidence = floatBuffer.get(i)
-                        val alpha = (confidence * 255f).toInt().coerceIn(0, 255)
-                        // Create a White pixel with the calculated Alpha
-                        // ARGB: Alpha, Red, Green, Blue
-                        pixels[i] = (alpha shl 24) or 0x00FFFFFF
-                    }
-                } else if (bufferSize >= pixelCount) {
-                    // UInt8 (1 byte per pixel)
-                    buffer.rewind()
-                    for (i in 0 until pixelCount) {
-                        val confidenceByte = buffer.get(i).toInt() and 0xFF
-                        // Assuming byte is 0-255 confidence
-                        val alpha = confidenceByte
-                        pixels[i] = (alpha shl 24) or 0x00FFFFFF
-                    }
-                } else {
-                    return null
-                }
-                
-                bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-                return bitmap
-            } catch (e2: Exception) {
-                e2.printStackTrace()
-                return null
-            }
+
+    private fun initializeEngine() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLlmLoading.value = true
+            yogaGuruEngine?.initialize()
+            _isLlmLoading.value = false
         }
     }
     
+    fun exitChatMode() {
+        _isChatMode.value = false
+        // We can keep the engine alive for faster re-entry, or close it to save RAM.
+        // For now, let's keep it alive but maybe release if memory is tight.
+        // yogaGuruEngine?.close() 
+        // yogaGuruEngine = null
+    }
+    
+    fun sendChatMessage(text: String) {
+        val currentMessages = _chatMessages.value.toMutableList()
+        currentMessages.add(ChatMessage(text, true))
+        _chatMessages.value = currentMessages
+        
+        _isLlmLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            yogaGuruEngine?.generateResponse(text)
+        }
+    }
+
     fun restartSession() {
         currentPoseIndex = 0
         _currentPose.value = poses[0]
